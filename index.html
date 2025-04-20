@@ -7,47 +7,79 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script defer>
     const dailyHours = { 0: 1, 1: 2, 2: 2, 3: 2, 4: 2, 5: 1, 6: 1 };
-
-    const setCookie = (name, value, days = 365) => {
-      const expires = new Date(Date.now() + days * 864e5).toUTCString();
-      document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/`;
-    };
-
-    const getCookie = name => {
-      return document.cookie.split('; ').reduce((r, v) => {
-        const parts = v.split('=');
-        return parts[0] === name ? decodeURIComponent(parts[1]) : r;
-      }, '');
-    };
-
     const getTodayKey = () => new Date().toLocaleDateString("en-CA");
 
-    const loadData = () => {
-      const saved = parseFloat(getCookie("debtHours") || "0");
-      const savedMins = parseInt(getCookie("debtMinutes") || "0");
-      const lastUpdate = getCookie("lastUpdate") || "";
+    let db;
+
+    const openDB = () => {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open("debtTrackerDB", 1);
+        request.onupgradeneeded = event => {
+          db = event.target.result;
+          db.createObjectStore("state", { keyPath: "key" });
+          db.createObjectStore("logs", { keyPath: "date" });
+        };
+        request.onsuccess = event => {
+          db = event.target.result;
+          resolve(db);
+        };
+        request.onerror = () => reject("IndexedDB failed to open.");
+      });
+    };
+
+    const saveToDB = (storeName, data) => {
+      return new Promise(resolve => {
+        const tx = db.transaction(storeName, "readwrite");
+        const store = tx.objectStore(storeName);
+        store.put(data);
+        tx.oncomplete = resolve;
+      });
+    };
+
+    const getFromDB = (storeName, key) => {
+      return new Promise(resolve => {
+        const tx = db.transaction(storeName, "readonly");
+        const store = tx.objectStore(storeName);
+        const request = store.get(key);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => resolve(null);
+      });
+    };
+
+    const loadData = async () => {
       const today = getTodayKey();
-      let hours = saved;
-      let mins = savedMins;
+      const state = await getFromDB("state", "mainState") || {
+        debtHours: 0,
+        debtMinutes: 0,
+        lastUpdate: ""
+      };
+
+      let { debtHours: hours, debtMinutes: mins, lastUpdate } = state;
 
       if (lastUpdate !== today) {
         const todayDay = new Date().getDay();
         hours += dailyHours[todayDay];
-        setCookie("debtHours", hours);
-        setCookie("lastUpdate", today);
-      }
+        mins = (hours % 2 === 0) ? 0 : mins;
 
-      if (hours % 2 === 0) {
-        mins = 0;
-        setCookie("debtMinutes", mins);
+        await saveToDB("state", {
+          key: "mainState",
+          debtHours: hours,
+          debtMinutes: mins,
+          lastUpdate: today
+        });
       }
 
       return { hours, mins };
     };
 
-    const saveData = (hours, mins) => {
-      setCookie("debtHours", hours);
-      setCookie("debtMinutes", mins);
+    const saveState = async (hours, mins) => {
+      await saveToDB("state", {
+        key: "mainState",
+        debtHours: hours,
+        debtMinutes: mins,
+        lastUpdate: getTodayKey()
+      });
+
       document.getElementById("debtHoursValue").innerText = `${hours} hrs ${mins} mins`;
     };
 
@@ -104,23 +136,24 @@
       updateStopwatch();
     };
 
-    window.onload = () => {
+    window.onload = async () => {
+      await openDB();
       document.getElementById("mainContainer").classList.remove("opacity-0", "translate-y-5");
 
-      let { hours, mins } = loadData();
+      let { hours, mins } = await loadData();
       document.getElementById("debtHoursValue").innerText = `${hours} hrs ${mins} mins`;
 
-      document.getElementById("editBtn").addEventListener("click", () => {
+      document.getElementById("editBtn").addEventListener("click", async () => {
         const newHours = prompt("Enter new debt hours:", hours);
         const newMins = prompt("Enter new debt minutes:", mins);
         if (newHours !== null && !isNaN(parseFloat(newHours)) && newMins !== null && !isNaN(parseInt(newMins))) {
           hours = parseFloat(newHours);
           mins = parseInt(newMins);
-          saveData(hours, mins);
+          await saveState(hours, mins);
         }
       });
 
-      document.getElementById("doneBtn").addEventListener("click", () => {
+      document.getElementById("doneBtn").addEventListener("click", async () => {
         const doneHours = parseFloat(document.getElementById("doneHours").value || "0");
         const doneMins = parseInt(document.getElementById("doneMinutes").value || "0");
 
@@ -129,20 +162,14 @@
 
         hours = Math.floor(totalMins / 60);
         mins = totalMins % 60;
-        saveData(hours, mins);
+        await saveState(hours, mins);
 
-        // Save to cookie-based log
         const today = getTodayKey();
-        let logs = {};
-        try {
-          logs = JSON.parse(decodeURIComponent(getCookie("calendarLogs") || "{}"));
-        } catch (e) {}
-
-        logs[today] = {
+        await saveToDB("logs", {
+          date: today,
           debt: `${hours} hrs ${mins} mins`,
           done: `${doneHours} hrs ${doneMins} mins`
-        };
-        setCookie("calendarLogs", JSON.stringify(logs));
+        });
       });
 
       document.getElementById("playPauseBtn").addEventListener("click", toggleStopwatch);
