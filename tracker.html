@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>0:00</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer>
+    const dailyHours = { 0: 1, 1: 2, 2: 2, 3: 2, 4: 2, 5: 1, 6: 1 };
+
+    const setCookie = (name, value, days = 365) => {
+      const expires = new Date(Date.now() + days * 864e5).toUTCString();
+      document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/`;
+    };
+
+    const getCookie = name => {
+      return document.cookie.split('; ').reduce((r, v) => {
+        const parts = v.split('=');
+        return parts[0] === name ? decodeURIComponent(parts[1]) : r;
+      }, '');
+    };
+
+    const getTodayKey = () => new Date().toLocaleDateString("en-CA");
+
+    const loadData = () => {
+      const saved = parseFloat(getCookie("debtHours") || "0");
+      const savedMins = parseInt(getCookie("debtMinutes") || "0");
+      const lastUpdate = getCookie("lastUpdate") || "";
+      const today = getTodayKey();
+      let hours = saved;
+      let mins = savedMins;
+
+      if (lastUpdate !== today) {
+        const todayDay = new Date().getDay();
+        hours += dailyHours[todayDay];
+        setCookie("debtHours", hours);
+        setCookie("lastUpdate", today);
+      }
+
+      if (hours % 2 === 0) {
+        mins = 0;
+        setCookie("debtMinutes", mins);
+      }
+
+      return { hours, mins };
+    };
+
+    const saveData = (hours, mins) => {
+      setCookie("debtHours", hours);
+      setCookie("debtMinutes", mins);
+      document.getElementById("debtHoursValue").innerText = `${hours} hrs ${mins} mins`;
+    };
+
+    const updateCountdown = () => {
+      const now = new Date();
+      const tomorrow = new Date();
+      tomorrow.setHours(24, 0, 0, 0);
+      const diff = tomorrow - now;
+
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+      document.getElementById("countdown").innerText = `Next update in: ${hours}h ${minutes}m ${seconds}s`;
+    };
+
+    let stopwatchInterval;
+    let stopwatchStartTime = null;
+    let elapsedTime = 0;
+    let running = false;
+
+    const updateStopwatch = () => {
+      let displayTime = elapsedTime;
+      if (running && stopwatchStartTime !== null) {
+        displayTime += Date.now() - stopwatchStartTime;
+      }
+
+      const totalSeconds = Math.floor(displayTime / 1000);
+      const mins = Math.floor(totalSeconds / 60) % 60;
+      const secs = totalSeconds % 60;
+      const millis = Math.floor((displayTime % 1000) / 10);
+      const hrs = Math.floor(totalSeconds / 3600);
+
+      document.getElementById("stopwatchTime").innerText = `${hrs > 0 ? hrs + ":" : ""}${mins}:${secs.toString().padStart(2, "0")}.${millis.toString().padStart(2, "0")}`;
+      document.title = `${hrs > 0 ? hrs + ":" : ""}${mins}:${secs.toString().padStart(2, "0")}`;
+
+      const spinner = document.getElementById("spinnerCircle");
+      const circumference = 2 * Math.PI * 45;
+      const progress = (displayTime / 1000) % 60 / 60;
+      spinner.style.strokeDashoffset = `${circumference * (1 - progress)}`;
+    };
+
+    const toggleStopwatch = () => {
+      if (!running) {
+        stopwatchStartTime = Date.now();
+        stopwatchInterval = setInterval(updateStopwatch, 50);
+        running = true;
+      } else {
+        elapsedTime += Date.now() - stopwatchStartTime;
+        stopwatchStartTime = null;
+        clearInterval(stopwatchInterval);
+        running = false;
+      }
+      updateStopwatch();
+    };
+
+    window.onload = () => {
+      document.getElementById("mainContainer").classList.remove("opacity-0", "translate-y-5");
+
+      let { hours, mins } = loadData();
+      document.getElementById("debtHoursValue").innerText = `${hours} hrs ${mins} mins`;
+
+      document.getElementById("editBtn").addEventListener("click", () => {
+        const newHours = prompt("Enter new debt hours:", hours);
+        const newMins = prompt("Enter new debt minutes:", mins);
+        if (newHours !== null && !isNaN(parseFloat(newHours)) && newMins !== null && !isNaN(parseInt(newMins))) {
+          hours = parseFloat(newHours);
+          mins = parseInt(newMins);
+          saveData(hours, mins);
+        }
+      });
+
+      document.getElementById("doneBtn").addEventListener("click", () => {
+        const doneHours = parseFloat(document.getElementById("doneHours").value || "0");
+        const doneMins = parseInt(document.getElementById("doneMinutes").value || "0");
+
+        let totalMins = hours * 60 + mins - (doneHours * 60 + doneMins);
+        totalMins = Math.max(0, totalMins);
+
+        hours = Math.floor(totalMins / 60);
+        mins = totalMins % 60;
+        saveData(hours, mins);
+
+        // Save to cookie-based log
+        const today = getTodayKey();
+        let logs = {};
+        try {
+          logs = JSON.parse(decodeURIComponent(getCookie("calendarLogs") || "{}"));
+        } catch (e) {}
+
+        logs[today] = {
+          debt: `${hours} hrs ${mins} mins`,
+          done: `${doneHours} hrs ${doneMins} mins`
+        };
+        setCookie("calendarLogs", JSON.stringify(logs));
+      });
+
+      document.getElementById("playPauseBtn").addEventListener("click", toggleStopwatch);
+      document.getElementById("resetBtn").addEventListener("click", () => {
+        stopwatchStartTime = null;
+        elapsedTime = 0;
+        running = false;
+        clearInterval(stopwatchInterval);
+        updateStopwatch();
+      });
+
+      updateCountdown();
+      setInterval(updateCountdown, 1000);
+    };
+  </script>
+  <style>
+    #spinnerCircle {
+      transition: stroke-dashoffset 0.05s linear;
+      transform: rotate(-90deg);
+      transform-origin: center;
+    }
+  </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-6 relative">
+  <div id="mainContainer" class="flex gap-8 opacity-0 translate-y-5 transition-all duration-700">
+    <!-- Debt Hours Panel -->
+    <div class="bg-white shadow-lg rounded-2xl p-10 w-96 text-center relative transform transition hover:scale-105">
+      <h1 class="text-3xl font-bold text-gray-800 mb-6">Debt Hours</h1>
+      <div class="text-5xl font-semibold text-blue-600 mb-8" id="debtHoursValue">0 hrs 0 mins</div>
+      <button id="editBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-6 rounded-xl text-lg transition-all">Edit Manually</button>
+      <p class="mt-6 text-gray-400 text-base">This value updates automatically daily</p>
+
+      <div class="mt-10">
+        <h2 class="text-xl font-semibold text-gray-700 mb-3">Work done today:</h2>
+        <div class="flex justify-center gap-4 mb-4">
+          <input id="doneHours" type="number" min="0" placeholder="Hours" class="w-24 p-3 border rounded-xl text-lg" />
+          <input id="doneMinutes" type="number" min="0" placeholder="Minutes" class="w-24 p-3 border rounded-xl text-lg" />
+        </div>
+        <button id="doneBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-6 rounded-xl text-lg transition-all">Done</button>
+      </div>
+
+      <div id="countdown" class="absolute bottom-5 left-1/2 -translate-x-1/2 text-gray-400 text-sm"></div>
+    </div>
+
+    <!-- Stopwatch Panel -->
+    <div class="bg-white shadow-lg rounded-2xl p-10 w-96 text-center relative flex flex-col items-center transform transition hover:scale-105">
+      <h1 class="text-3xl font-bold text-gray-800 mb-6">Stopwatch</h1>
+      <div id="spinnerContainer" class="relative w-48 h-48 mb-6">
+        <svg class="absolute top-0 left-0 w-full h-full" viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="45" stroke="#e5e7eb" stroke-width="10" fill="none" />
+          <circle cx="50" cy="50" r="45" stroke="#3b82f6" stroke-width="10" fill="none" stroke-linecap="round" stroke-dasharray="283" stroke-dashoffset="283" id="spinnerCircle" />
+        </svg>
+        <div class="absolute top-0 left-0 w-full h-full flex items-center justify-center">
+          <div id="stopwatchTime" class="text-3xl font-bold text-blue-600">0:00.00</div>
+        </div>
+      </div>
+      <div class="flex justify-center gap-4 mt-4">
+        <button id="playPauseBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-6 rounded-xl text-lg transition-all">Play/Pause</button>
+        <button id="resetBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-6 rounded-xl text-lg transition-all">Reset</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
