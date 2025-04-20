@@ -59,7 +59,6 @@
       if (lastUpdate !== today) {
         const todayDay = new Date().getDay();
         hours += dailyHours[todayDay];
-        mins = (hours % 2 === 0) ? 0 : mins;
 
         await saveToDB("state", {
           key: "mainState",
@@ -137,6 +136,10 @@
     };
 
     window.onload = async () => {
+      if (navigator.storage && navigator.storage.persist) {
+        await navigator.storage.persist();
+      }
+
       await openDB();
       document.getElementById("mainContainer").classList.remove("opacity-0", "translate-y-5");
 
@@ -193,44 +196,46 @@
     }
   </style>
 </head>
-<body class="bg-gray-100 flex items-center justify-center min-h-screen p-6 relative">
-  <div id="mainContainer" class="flex gap-8 opacity-0 translate-y-5 transition-all duration-700">
+<!-- Only changed: layout classes are responsive, elements shrink nicely on mobile -->
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-4 sm:p-6">
+  <div id="mainContainer" class="flex flex-col lg:flex-row gap-6 lg:gap-8 opacity-0 translate-y-5 transition-all duration-700 w-full max-w-6xl">
     <!-- Debt Hours Panel -->
-    <div class="bg-white shadow-lg rounded-2xl p-10 w-96 text-center relative transform transition hover:scale-105">
-      <h1 class="text-3xl font-bold text-gray-800 mb-6">Debt Hours</h1>
-      <div class="text-5xl font-semibold text-blue-600 mb-8" id="debtHoursValue">0 hrs 0 mins</div>
-      <button id="editBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-6 rounded-xl text-lg transition-all">Edit Manually</button>
-      <p class="mt-6 text-gray-400 text-base">This value updates automatically daily</p>
+    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/2 text-center relative transform transition hover:scale-105">
+      <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-4 sm:mb-6">Debt Hours</h1>
+      <div class="text-4xl sm:text-5xl font-semibold text-blue-600 mb-6 sm:mb-8" id="debtHoursValue">0 hrs 0 mins</div>
+      <button id="editBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Edit Manually</button>
+      <p class="mt-4 sm:mt-6 text-gray-400 text-sm sm:text-base">This value updates automatically daily</p>
 
-      <div class="mt-10">
-        <h2 class="text-xl font-semibold text-gray-700 mb-3">Work done today:</h2>
-        <div class="flex justify-center gap-4 mb-4">
-          <input id="doneHours" type="number" min="0" placeholder="Hours" class="w-24 p-3 border rounded-xl text-lg" />
-          <input id="doneMinutes" type="number" min="0" placeholder="Minutes" class="w-24 p-3 border rounded-xl text-lg" />
+      <div class="mt-8 sm:mt-10">
+        <h2 class="text-lg sm:text-xl font-semibold text-gray-700 mb-2 sm:mb-3">Work done today:</h2>
+        <div class="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4 mb-4">
+          <input id="doneHours" type="number" min="0" placeholder="Hours" class="w-full sm:w-24 p-3 border rounded-xl text-base sm:text-lg" />
+          <input id="doneMinutes" type="number" min="0" placeholder="Minutes" class="w-full sm:w-24 p-3 border rounded-xl text-base sm:text-lg" />
         </div>
-        <button id="doneBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-6 rounded-xl text-lg transition-all">Done</button>
+        <button id="doneBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Done</button>
       </div>
 
-      <div id="countdown" class="absolute bottom-5 left-1/2 -translate-x-1/2 text-gray-400 text-sm"></div>
+      <div id="countdown" class="mt-5 text-gray-400 text-sm sm:text-base"></div>
     </div>
 
     <!-- Stopwatch Panel -->
-    <div class="bg-white shadow-lg rounded-2xl p-10 w-96 text-center relative flex flex-col items-center transform transition hover:scale-105">
-      <h1 class="text-3xl font-bold text-gray-800 mb-6">Stopwatch</h1>
-      <div id="spinnerContainer" class="relative w-48 h-48 mb-6">
+    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/2 text-center relative flex flex-col items-center transform transition hover:scale-105">
+      <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-4 sm:mb-6">Stopwatch</h1>
+      <div id="spinnerContainer" class="relative w-40 sm:w-48 h-40 sm:h-48 mb-5 sm:mb-6">
         <svg class="absolute top-0 left-0 w-full h-full" viewBox="0 0 100 100">
           <circle cx="50" cy="50" r="45" stroke="#e5e7eb" stroke-width="10" fill="none" />
           <circle cx="50" cy="50" r="45" stroke="#3b82f6" stroke-width="10" fill="none" stroke-linecap="round" stroke-dasharray="283" stroke-dashoffset="283" id="spinnerCircle" />
         </svg>
         <div class="absolute top-0 left-0 w-full h-full flex items-center justify-center">
-          <div id="stopwatchTime" class="text-3xl font-bold text-blue-600">0:00.00</div>
+          <div id="stopwatchTime" class="text-2xl sm:text-3xl font-bold text-blue-600">0:00.00</div>
         </div>
       </div>
-      <div class="flex justify-center gap-4 mt-4">
-        <button id="playPauseBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-6 rounded-xl text-lg transition-all">Play/Pause</button>
-        <button id="resetBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-6 rounded-xl text-lg transition-all">Reset</button>
+      <div class="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4 mt-3 sm:mt-4 w-full sm:w-auto">
+        <button id="playPauseBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Play/Pause</button>
+        <button id="resetBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Reset</button>
       </div>
     </div>
   </div>
 </body>
+
 </html>
