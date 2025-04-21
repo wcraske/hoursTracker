@@ -3,174 +3,139 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>0:00</title>
+  <title>Debt Tracker</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script defer>
     const dailyHours = { 0: 1, 1: 2, 2: 2, 3: 2, 4: 2, 5: 1, 6: 1 };
     const getTodayKey = () => new Date().toLocaleDateString("en-CA");
+    let db, stopwatchInterval, stopwatchStartTime = null, elapsedTime = 0, running = false;
+    
+    const openDB = () => new Promise((resolve, reject) => {
+      const request = indexedDB.open("debtTrackerDB", 1);
+      request.onupgradeneeded = e => {
+        db = e.target.result;
+        db.createObjectStore("state", { keyPath: "key" });
+        db.createObjectStore("logs", { keyPath: "date" });
+      };
+      request.onsuccess = e => { db = e.target.result; resolve(db); };
+      request.onerror = () => reject("IndexedDB failed to open.");
+    });
 
-    let db;
+    const saveToDB = (storeName, data) => new Promise(resolve => {
+      const tx = db.transaction(storeName, "readwrite");
+      tx.objectStore(storeName).put(data);
+      tx.oncomplete = resolve;
+    });
 
-    const openDB = () => {
-      return new Promise((resolve, reject) => {
-        const request = indexedDB.open("debtTrackerDB", 1);
-        request.onupgradeneeded = event => {
-          db = event.target.result;
-          db.createObjectStore("state", { keyPath: "key" });
-          db.createObjectStore("logs", { keyPath: "date" });
-        };
-        request.onsuccess = event => {
-          db = event.target.result;
-          resolve(db);
-        };
-        request.onerror = () => reject("IndexedDB failed to open.");
-      });
-    };
+    const getFromDB = (storeName, key) => new Promise(resolve => {
+      const tx = db.transaction(storeName, "readonly");
+      const request = tx.objectStore(storeName).get(key);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(null);
+    });
 
-    const saveToDB = (storeName, data) => {
-      return new Promise(resolve => {
-        const tx = db.transaction(storeName, "readwrite");
-        const store = tx.objectStore(storeName);
-        store.put(data);
-        tx.oncomplete = resolve;
-      });
-    };
-
-    const getFromDB = (storeName, key) => {
-      return new Promise(resolve => {
-        const tx = db.transaction(storeName, "readonly");
-        const store = tx.objectStore(storeName);
-        const request = store.get(key);
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => resolve(null);
-      });
+    const updateDisplay = (hours, mins) => {
+      document.getElementById("debtHoursValue").innerText = `${hours} hrs ${mins} mins`;
+      if (!running) document.title = `Debt: ${hours}h ${mins}m`;
     };
 
     const loadData = async () => {
       const today = getTodayKey();
-      const state = await getFromDB("state", "mainState") || {
-        debtHours: 0,
-        debtMinutes: 0,
-        lastUpdate: ""
-      };
-
+      const state = await getFromDB("state", "mainState") || { debtHours: 0, debtMinutes: 0, lastUpdate: "" };
       let { debtHours: hours, debtMinutes: mins, lastUpdate } = state;
 
       if (lastUpdate !== today) {
-        const todayDay = new Date().getDay();
-        hours += dailyHours[todayDay];
-
-        await saveToDB("state", {
-          key: "mainState",
-          debtHours: hours,
-          debtMinutes: mins,
-          lastUpdate: today
-        });
+        hours += dailyHours[new Date().getDay()];
+        await saveToDB("state", { key: "mainState", debtHours: hours, debtMinutes: mins, lastUpdate: today });
       }
-
+      
+      updateDisplay(hours, mins);
       return { hours, mins };
     };
 
     const saveState = async (hours, mins) => {
       await saveToDB("state", {
-        key: "mainState",
-        debtHours: hours,
-        debtMinutes: mins,
-        lastUpdate: getTodayKey()
+        key: "mainState", debtHours: hours, debtMinutes: mins, lastUpdate: getTodayKey()
       });
-
-      document.getElementById("debtHoursValue").innerText = `${hours} hrs ${mins} mins`;
+      updateDisplay(hours, mins);
     };
 
     const updateCountdown = () => {
       const now = new Date();
-      const tomorrow = new Date();
+      const tomorrow = new Date(now);
       tomorrow.setHours(24, 0, 0, 0);
       const diff = tomorrow - now;
-
-      const hours = Math.floor(diff / (1000 * 60 * 60));
-      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-
+      const hours = Math.floor(diff / 3600000);
+      const minutes = Math.floor((diff % 3600000) / 60000);
+      const seconds = Math.floor((diff % 60000) / 1000);
       document.getElementById("countdown").innerText = `Next update in: ${hours}h ${minutes}m ${seconds}s`;
     };
 
-    let stopwatchInterval;
-    let stopwatchStartTime = null;
-    let elapsedTime = 0;
-    let running = false;
-
     const updateStopwatch = () => {
-      let displayTime = elapsedTime;
-      if (running && stopwatchStartTime !== null) {
-        displayTime += Date.now() - stopwatchStartTime;
-      }
-
+      let displayTime = elapsedTime + (running && stopwatchStartTime ? Date.now() - stopwatchStartTime : 0);
       const totalSeconds = Math.floor(displayTime / 1000);
       const mins = Math.floor(totalSeconds / 60) % 60;
       const secs = totalSeconds % 60;
       const millis = Math.floor((displayTime % 1000) / 10);
       const hrs = Math.floor(totalSeconds / 3600);
 
-      document.getElementById("stopwatchTime").innerText = `${hrs > 0 ? hrs + ":" : ""}${mins}:${secs.toString().padStart(2, "0")}.${millis.toString().padStart(2, "0")}`;
-      document.title = `${hrs > 0 ? hrs + ":" : ""}${mins}:${secs.toString().padStart(2, "0")}`;
+      const timeString = `${hrs > 0 ? hrs + ":" : ""}${mins}:${secs.toString().padStart(2, "0")}.${millis.toString().padStart(2, "0")}`;
+      document.getElementById("stopwatchTime").innerText = timeString;
+
+      if (running) {
+        document.title = hrs > 0 ? 
+          `${hrs}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}` : 
+          `${mins}:${secs.toString().padStart(2, "0")}`;
+      }
 
       const spinner = document.getElementById("spinnerCircle");
-      const circumference = 2 * Math.PI * 45;
-      const progress = (displayTime / 1000) % 60 / 60;
-      spinner.style.strokeDashoffset = `${circumference * (1 - progress)}`;
+      spinner.style.strokeDashoffset = `${2 * Math.PI * 45 * (1 - (displayTime / 1000) % 60 / 60)}`;
     };
 
     const toggleStopwatch = () => {
       if (!running) {
         stopwatchStartTime = Date.now();
         stopwatchInterval = setInterval(updateStopwatch, 50);
-        running = true;
       } else {
         elapsedTime += Date.now() - stopwatchStartTime;
         stopwatchStartTime = null;
         clearInterval(stopwatchInterval);
-        running = false;
+        loadData(); // Restore debt title
       }
+      running = !running;
       updateStopwatch();
     };
-
+    
     window.onload = async () => {
-      if (navigator.storage && navigator.storage.persist) {
-        await navigator.storage.persist();
-      }
-
+      if (navigator.storage?.persist) await navigator.storage.persist();
       await openDB();
       document.getElementById("mainContainer").classList.remove("opacity-0", "translate-y-5");
-
-      let { hours, mins } = await loadData();
-      document.getElementById("debtHoursValue").innerText = `${hours} hrs ${mins} mins`;
-
+      
+      const { hours, mins } = await loadData();
+      
       document.getElementById("editBtn").addEventListener("click", async () => {
         const newHours = prompt("Enter new debt hours:", hours);
         const newMins = prompt("Enter new debt minutes:", mins);
         if (newHours !== null && !isNaN(parseFloat(newHours)) && newMins !== null && !isNaN(parseInt(newMins))) {
-          hours = parseFloat(newHours);
-          mins = parseInt(newMins);
-          await saveState(hours, mins);
+          await saveState(parseFloat(newHours), parseInt(newMins));
         }
       });
 
       document.getElementById("doneBtn").addEventListener("click", async () => {
         const doneHours = parseFloat(document.getElementById("doneHours").value || "0");
         const doneMins = parseInt(document.getElementById("doneMinutes").value || "0");
-
-        let totalMins = hours * 60 + mins - (doneHours * 60 + doneMins);
+        
+        const currData = await loadData();
+        let totalMins = currData.hours * 60 + currData.mins - (doneHours * 60 + doneMins);
         totalMins = Math.max(0, totalMins);
+        
+        const newHours = Math.floor(totalMins / 60);
+        const newMins = totalMins % 60;
+        await saveState(newHours, newMins);
 
-        hours = Math.floor(totalMins / 60);
-        mins = totalMins % 60;
-        await saveState(hours, mins);
-
-        const today = getTodayKey();
         await saveToDB("logs", {
-          date: today,
-          debt: `${hours} hrs ${mins} mins`,
+          date: getTodayKey(),
+          debt: `${newHours} hrs ${newMins} mins`,
           done: `${doneHours} hrs ${doneMins} mins`
         });
       });
@@ -182,6 +147,7 @@
         running = false;
         clearInterval(stopwatchInterval);
         updateStopwatch();
+        loadData(); // Restore debt title
       });
 
       updateCountdown();
@@ -196,7 +162,6 @@
     }
   </style>
 </head>
-<!-- Only changed: layout classes are responsive, elements shrink nicely on mobile -->
 <body class="bg-gray-100 flex items-center justify-center min-h-screen p-4 sm:p-6">
   <div id="mainContainer" class="flex flex-col lg:flex-row gap-6 lg:gap-8 opacity-0 translate-y-5 transition-all duration-700 w-full max-w-6xl">
     <!-- Debt Hours Panel -->
@@ -237,5 +202,4 @@
     </div>
   </div>
 </body>
-
 </html>
