@@ -10,7 +10,9 @@
     const dailyHours = { 0: 1, 1: 2, 2: 2, 3: 2, 4: 2, 5: 1, 6: 1 };
     const getTodayKey = () => new Date().toLocaleDateString("en-CA");
     let db, stopwatchInterval, stopwatchStartTime = null, elapsedTime = 0, running = false;
-    
+
+    const HOURLY_RATE = 55.37 * (1 - 0.045);
+
     const openDB = () => new Promise((resolve, reject) => {
       const request = indexedDB.open("debtTrackerDB", 1);
       request.onupgradeneeded = e => {
@@ -40,6 +42,13 @@
       if (!running) document.title = `Debt: ${hours}h ${mins}m`;
     };
 
+    const updateDailySummary = (hours, minutes) => {
+      const totalTime = hours + minutes / 60;
+      const money = totalTime * HOURLY_RATE;
+      document.getElementById("dailyCompletedValue").innerText = `${hours}h ${minutes}m`;
+      document.getElementById("dailyEarningsValue").innerText = `$${money.toFixed(2)} CAD`;
+    };
+
     const loadData = async () => {
       const today = getTodayKey();
       const state = await getFromDB("state", "mainState") || { debtHours: 0, debtMinutes: 0, lastUpdate: "" };
@@ -49,7 +58,7 @@
         hours += dailyHours[new Date().getDay()];
         await saveToDB("state", { key: "mainState", debtHours: hours, debtMinutes: mins, lastUpdate: today });
       }
-      
+
       updateDisplay(hours, mins);
       return { hours, mins };
     };
@@ -101,19 +110,19 @@
         elapsedTime += Date.now() - stopwatchStartTime;
         stopwatchStartTime = null;
         clearInterval(stopwatchInterval);
-        loadData(); // Restore debt title
+        loadData();
       }
       running = !running;
       updateStopwatch();
     };
-    
+
     window.onload = async () => {
       if (navigator.storage?.persist) await navigator.storage.persist();
       await openDB();
       document.getElementById("mainContainer").classList.remove("opacity-0", "translate-y-5");
-      
+
       const { hours, mins } = await loadData();
-      
+
       document.getElementById("editBtn").addEventListener("click", async () => {
         const newHours = prompt("Enter new debt hours:", hours);
         const newMins = prompt("Enter new debt minutes:", mins);
@@ -125,11 +134,11 @@
       document.getElementById("doneBtn").addEventListener("click", async () => {
         const doneHours = parseFloat(document.getElementById("doneHours").value || "0");
         const doneMins = parseInt(document.getElementById("doneMinutes").value || "0");
-        
+
         const currData = await loadData();
         let totalMins = currData.hours * 60 + currData.mins - (doneHours * 60 + doneMins);
         totalMins = Math.max(0, totalMins);
-        
+
         const newHours = Math.floor(totalMins / 60);
         const newMins = totalMins % 60;
         await saveState(newHours, newMins);
@@ -139,6 +148,8 @@
           debt: `${newHours} hrs ${newMins} mins`,
           done: `${doneHours} hrs ${doneMins} mins`
         });
+
+        updateDailySummary(doneHours, doneMins);
       });
 
       document.getElementById("playPauseBtn").addEventListener("click", toggleStopwatch);
@@ -148,7 +159,7 @@
         running = false;
         clearInterval(stopwatchInterval);
         updateStopwatch();
-        loadData(); // Restore debt title
+        loadData();
       });
 
       updateCountdown();
@@ -164,9 +175,9 @@
   </style>
 </head>
 <body class="bg-gray-100 flex items-center justify-center min-h-screen p-4 sm:p-6">
-  <div id="mainContainer" class="flex flex-col lg:flex-row gap-6 lg:gap-8 opacity-0 translate-y-5 transition-all duration-700 w-full max-w-6xl">
+  <div id="mainContainer" class="flex flex-col lg:flex-row gap-6 lg:gap-8 opacity-0 translate-y-5 transition-all duration-700 w-full max-w-7xl">
     <!-- Debt Hours Panel -->
-    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/2 text-center relative transform transition hover:scale-105">
+    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/3 text-center relative transform transition hover:scale-105">
       <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-4 sm:mb-6">Debt Hours</h1>
       <div class="text-4xl sm:text-5xl font-semibold text-blue-600 mb-6 sm:mb-8" id="debtHoursValue">0 hrs 0 mins</div>
       <button id="editBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Edit Manually</button>
@@ -185,7 +196,7 @@
     </div>
 
     <!-- Stopwatch Panel -->
-    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/2 text-center relative flex flex-col items-center transform transition hover:scale-105">
+    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/3 text-center relative flex flex-col items-center transform transition hover:scale-105">
       <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-4 sm:mb-6">Stopwatch</h1>
       <div id="spinnerContainer" class="relative w-40 sm:w-48 h-40 sm:h-48 mb-5 sm:mb-6">
         <svg class="absolute top-0 left-0 w-full h-full" viewBox="0 0 100 100">
@@ -200,6 +211,15 @@
         <button id="playPauseBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Play/Pause</button>
         <button id="resetBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Reset</button>
       </div>
+    </div>
+
+    <!-- Daily Summary Panel -->
+    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/3 text-center relative transform transition hover:scale-105">
+      <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-4 sm:mb-6">Daily Summary</h1>
+      <div class="text-gray-600 text-lg sm:text-xl mb-4">Completed Time</div>
+      <div id="dailyCompletedValue" class="text-3xl sm:text-4xl font-semibold text-blue-600 mb-6">0h 0m</div>
+      <div class="text-gray-600 text-lg sm:text-xl mb-4">Estimated Earnings</div>
+      <div id="dailyEarningsValue" class="text-3xl sm:text-4xl font-semibold text-blue-600">$0.00 CAD</div>
     </div>
   </div>
 </body>
