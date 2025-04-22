@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <link rel="icon" type="image/png" href="favicon.png">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Debt Tracker</title>
@@ -10,9 +9,7 @@
     const dailyHours = { 0: 1, 1: 2, 2: 2, 3: 2, 4: 2, 5: 1, 6: 1 };
     const getTodayKey = () => new Date().toLocaleDateString("en-CA");
     let db, stopwatchInterval, stopwatchStartTime = null, elapsedTime = 0, running = false;
-
-    const HOURLY_RATE = 55.37 * (1 - 0.045);
-
+    
     const openDB = () => new Promise((resolve, reject) => {
       const request = indexedDB.open("debtTrackerDB", 1);
       request.onupgradeneeded = e => {
@@ -42,30 +39,47 @@
       if (!running) document.title = `Debt: ${hours}h ${mins}m`;
     };
 
-    const updateDailySummary = (hours, minutes) => {
-      const totalTime = hours + minutes / 60;
-      const money = totalTime * HOURLY_RATE;
-      document.getElementById("dailyCompletedValue").innerText = `${hours}h ${minutes}m`;
-      document.getElementById("dailyEarningsValue").innerText = `$${money.toFixed(2)} CAD`;
+    const updateDailyDisplay = (earnings) => {
+      document.getElementById("cadEarnings").innerText = `${earnings.toFixed(2)} CAD`;
     };
 
     const loadData = async () => {
       const today = getTodayKey();
-      const state = await getFromDB("state", "mainState") || { debtHours: 0, debtMinutes: 0, lastUpdate: "" };
-      let { debtHours: hours, debtMinutes: mins, lastUpdate } = state;
+      const state = await getFromDB("state", "mainState") || { 
+        debtHours: 0, 
+        debtMinutes: 0, 
+        lastUpdate: "",
+        totalEarnings: 0 
+      };
+      
+      let { debtHours: hours, debtMinutes: mins, lastUpdate, totalEarnings } = state;
 
       if (lastUpdate !== today) {
         hours += dailyHours[new Date().getDay()];
-        await saveToDB("state", { key: "mainState", debtHours: hours, debtMinutes: mins, lastUpdate: today });
+        // Reset earnings for the new day
+        totalEarnings = 0;
+        await saveToDB("state", { 
+          key: "mainState", 
+          debtHours: hours, 
+          debtMinutes: mins, 
+          lastUpdate: today,
+          totalEarnings: 0
+        });
       }
-
+      
       updateDisplay(hours, mins);
-      return { hours, mins };
+      updateDailyDisplay(totalEarnings || 0);
+      
+      return { hours, mins, totalEarnings };
     };
 
-    const saveState = async (hours, mins) => {
+    const saveState = async (hours, mins, earnings) => {
       await saveToDB("state", {
-        key: "mainState", debtHours: hours, debtMinutes: mins, lastUpdate: getTodayKey()
+        key: "mainState", 
+        debtHours: hours, 
+        debtMinutes: mins, 
+        lastUpdate: getTodayKey(),
+        totalEarnings: earnings
       });
       updateDisplay(hours, mins);
     };
@@ -110,46 +124,76 @@
         elapsedTime += Date.now() - stopwatchStartTime;
         stopwatchStartTime = null;
         clearInterval(stopwatchInterval);
-        loadData();
+        loadData(); // Restore debt title
       }
       running = !running;
       updateStopwatch();
     };
-
+    
     window.onload = async () => {
       if (navigator.storage?.persist) await navigator.storage.persist();
       await openDB();
       document.getElementById("mainContainer").classList.remove("opacity-0", "translate-y-5");
-
-      const { hours, mins } = await loadData();
-
+      
+      const { hours, mins, totalEarnings } = await loadData();
+      
       document.getElementById("editBtn").addEventListener("click", async () => {
         const newHours = prompt("Enter new debt hours:", hours);
         const newMins = prompt("Enter new debt minutes:", mins);
         if (newHours !== null && !isNaN(parseFloat(newHours)) && newMins !== null && !isNaN(parseInt(newMins))) {
-          await saveState(parseFloat(newHours), parseInt(newMins));
+          await saveState(parseFloat(newHours), parseInt(newMins), totalEarnings);
         }
       });
 
       document.getElementById("doneBtn").addEventListener("click", async () => {
         const doneHours = parseFloat(document.getElementById("doneHours").value || "0");
         const doneMins = parseInt(document.getElementById("doneMinutes").value || "0");
+        const hourlyPay = parseFloat(document.getElementById("taskPay").value || 0);
 
+        const doneTotalHours = doneHours + doneMins/60;
+        const currentEarnings = doneTotalHours * hourlyPay * 1.37;
+        
+        // Get current state including accumulated earnings
         const currData = await loadData();
+        const stateData = await getFromDB("state", "mainState") || { 
+          debtHours: 0, 
+          debtMinutes: 0, 
+          lastUpdate: "",
+          totalEarnings: 0
+        };
+        
+        // Update accumulated earnings
+        const totalEarnings = (stateData.totalEarnings || 0) + currentEarnings;
+        
+        // Update debt calculation
         let totalMins = currData.hours * 60 + currData.mins - (doneHours * 60 + doneMins);
         totalMins = Math.max(0, totalMins);
-
+        
         const newHours = Math.floor(totalMins / 60);
         const newMins = totalMins % 60;
-        await saveState(newHours, newMins);
+        
+        // Save updated state with new earnings
+        await saveState(newHours, newMins, totalEarnings);
+        
+        // Update earnings display
+        updateDailyDisplay(totalEarnings);
 
+        // Log the activity
         await saveToDB("logs", {
           date: getTodayKey(),
           debt: `${newHours} hrs ${newMins} mins`,
-          done: `${doneHours} hrs ${doneMins} mins`
+          done: `${doneHours} hrs ${doneMins} mins`,
+          earnings: currentEarnings.toFixed(2)
         });
+      });
 
-        updateDailySummary(doneHours, doneMins);
+      document.getElementById("resetEarningsBtn").addEventListener("click", async () => {
+        const stateData = await getFromDB("state", "mainState");
+        if (stateData) {
+          stateData.totalEarnings = 0;
+          await saveToDB("state", stateData);
+          updateDailyDisplay(0);
+        }
       });
 
       document.getElementById("playPauseBtn").addEventListener("click", toggleStopwatch);
@@ -175,9 +219,11 @@
   </style>
 </head>
 <body class="bg-gray-100 flex items-center justify-center min-h-screen p-4 sm:p-6">
-  <div id="mainContainer" class="flex flex-col lg:flex-row gap-6 lg:gap-8 opacity-0 translate-y-5 transition-all duration-700 w-full max-w-7xl">
+  <div id="mainContainer" class="flex flex-col lg:flex-row gap-6 lg:gap-8 opacity-0 translate-y-5 transition-all duration-700 w-full max-w-6xl">
+
+
     <!-- Debt Hours Panel -->
-    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/3 text-center relative transform transition hover:scale-105">
+    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/2 text-center relative transform transition hover:scale-105">
       <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-4 sm:mb-6">Debt Hours</h1>
       <div class="text-4xl sm:text-5xl font-semibold text-blue-600 mb-6 sm:mb-8" id="debtHoursValue">0 hrs 0 mins</div>
       <button id="editBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Edit Manually</button>
@@ -196,7 +242,7 @@
     </div>
 
     <!-- Stopwatch Panel -->
-    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/3 text-center relative flex flex-col items-center transform transition hover:scale-105">
+    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/2 text-center relative flex flex-col items-center transform transition hover:scale-105">
       <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-4 sm:mb-6">Stopwatch</h1>
       <div id="spinnerContainer" class="relative w-40 sm:w-48 h-40 sm:h-48 mb-5 sm:mb-6">
         <svg class="absolute top-0 left-0 w-full h-full" viewBox="0 0 100 100">
@@ -214,13 +260,19 @@
     </div>
 
     <!-- Daily Summary Panel -->
-    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/3 text-center relative transform transition hover:scale-105">
-      <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-4 sm:mb-6">Daily Summary</h1>
-      <div class="text-gray-600 text-lg sm:text-xl mb-4">Completed Time</div>
-      <div id="dailyCompletedValue" class="text-3xl sm:text-4xl font-semibold text-blue-600 mb-6">0h 0m</div>
-      <div class="text-gray-600 text-lg sm:text-xl mb-4">Estimated Earnings</div>
-      <div id="dailyEarningsValue" class="text-3xl sm:text-4xl font-semibold text-blue-600">$0.00 CAD</div>
+    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/2 text-center relative transform transition hover:scale-105">
+      <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-4 sm:mb-6">Today's Earnings</h1>
+      <div class="text-3xl sm:text-4xl font-semibold text-blue-600 mb-6 sm:mb-8" id="cadEarnings">0.00 CAD</div>
+      <button id="resetEarningsBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Reset Earnings</button>
+      <div class="mt-8 sm:mt-10">
+        <h2 class="text-lg sm:text-xl font-semibold text-gray-700 mb-2 sm:mb-3">Work Input:</h2>
+        <div class="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4 mb-4">
+          <input id="taskPay" type="number" min="0" placeholder="Pay per Hour ($)" class="w-full sm:w-32 p-3 border rounded-xl text-base sm:text-lg" />
+        </div>
+      </div>
+      <p class="mt-4 sm:mt-6 text-gray-400 text-sm sm:text-base">Earnings reset automatically at midnight</p>
     </div>
+
   </div>
 </body>
 </html>
