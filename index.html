@@ -56,7 +56,6 @@
 
       if (lastUpdate !== today) {
         hours += dailyHours[new Date().getDay()];
-        // Reset earnings for the new day
         totalEarnings = 0;
         await saveToDB("state", { 
           key: "mainState", 
@@ -153,7 +152,6 @@
         const doneTotalHours = doneHours + doneMins/60;
         const currentEarnings = doneTotalHours * hourlyPay * 1.37;
         
-        // Get current state including accumulated earnings
         const currData = await loadData();
         const stateData = await getFromDB("state", "mainState") || { 
           debtHours: 0, 
@@ -162,23 +160,15 @@
           totalEarnings: 0
         };
         
-        // Update accumulated earnings
         const totalEarnings = (stateData.totalEarnings || 0) + currentEarnings;
-        
-        // Update debt calculation
         let totalMins = currData.hours * 60 + currData.mins - (doneHours * 60 + doneMins);
         totalMins = Math.max(0, totalMins);
         
         const newHours = Math.floor(totalMins / 60);
         const newMins = totalMins % 60;
-        
-        // Save updated state with new earnings
         await saveState(newHours, newMins, totalEarnings);
-        
-        // Update earnings display
         updateDailyDisplay(totalEarnings);
 
-        // Log the activity
         await saveToDB("logs", {
           date: getTodayKey(),
           debt: `${newHours} hrs ${newMins} mins`,
@@ -219,11 +209,10 @@
   </style>
 </head>
 <body class="bg-gray-100 flex items-center justify-center min-h-screen p-4 sm:p-6">
-  <div id="mainContainer" class="flex flex-col lg:flex-row gap-6 lg:gap-8 opacity-0 translate-y-5 transition-all duration-700 w-full max-w-6xl">
-
-
+  <div id="mainContainer" class="flex flex-col lg:flex-row gap-6 lg:gap-8 opacity-0 translate-y-5 transition-all duration-700 w-full max-w-7xl">
+    
     <!-- Debt Hours Panel -->
-    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/2 text-center relative transform transition hover:scale-105">
+    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-[95%] text-center relative transform transition hover:scale-105">
       <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-4 sm:mb-6">Debt Hours</h1>
       <div class="text-4xl sm:text-5xl font-semibold text-blue-600 mb-6 sm:mb-8" id="debtHoursValue">0 hrs 0 mins</div>
       <button id="editBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Edit Manually</button>
@@ -232,8 +221,8 @@
       <div class="mt-8 sm:mt-10">
         <h2 class="text-lg sm:text-xl font-semibold text-gray-700 mb-2 sm:mb-3">Work done today:</h2>
         <div class="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4 mb-4">
-          <input id="doneHours" type="number" min="0" placeholder="Hours" class="w-full sm:w-24 p-3 border rounded-xl text-base sm:text-lg" />
-          <input id="doneMinutes" type="number" min="0" placeholder="Minutes" class="w-full sm:w-24 p-3 border rounded-xl text-base sm:text-lg" />
+          <input id="doneHours" type="number" min="0" placeholder="Hours" class="w-full sm:w-40 p-3 border rounded-xl text-base sm:text-lg" />
+          <input id="doneMinutes" type="number" min="0" placeholder="Minutes" class="w-full sm:w-40 p-3 border rounded-xl text-base sm:text-lg" />
         </div>
         <button id="doneBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Done</button>
       </div>
@@ -242,7 +231,7 @@
     </div>
 
     <!-- Stopwatch Panel -->
-    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/2 text-center relative flex flex-col items-center transform transition hover:scale-105">
+    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-[95%] text-center relative flex flex-col items-center transform transition hover:scale-105">
       <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-4 sm:mb-6">Stopwatch</h1>
       <div id="spinnerContainer" class="relative w-40 sm:w-48 h-40 sm:h-48 mb-5 sm:mb-6">
         <svg class="absolute top-0 left-0 w-full h-full" viewBox="0 0 100 100">
@@ -260,14 +249,14 @@
     </div>
 
     <!-- Daily Summary Panel -->
-    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-1/2 text-center relative transform transition hover:scale-105">
+    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-[95%] text-center relative transform transition hover:scale-105">
       <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-4 sm:mb-6">Today's Earnings</h1>
       <div class="text-3xl sm:text-4xl font-semibold text-blue-600 mb-6 sm:mb-8" id="cadEarnings">0.00 CAD</div>
       <button id="resetEarningsBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Reset Earnings</button>
       <div class="mt-8 sm:mt-10">
         <h2 class="text-lg sm:text-xl font-semibold text-gray-700 mb-2 sm:mb-3">Work Input:</h2>
         <div class="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4 mb-4">
-          <input id="taskPay" type="number" min="0" placeholder="Pay per Hour ($)" class="w-full sm:w-32 p-3 border rounded-xl text-base sm:text-lg" />
+          <input id="taskPay" type="number" min="0" placeholder="Pay per Hour ($)" class="w-full sm:w-40 p-3 border rounded-xl text-base sm:text-lg" />
         </div>
       </div>
       <p class="mt-4 sm:mt-6 text-gray-400 text-sm sm:text-base">Earnings reset automatically at midnight</p>
