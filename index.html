@@ -150,7 +150,7 @@
         const hourlyPay = parseFloat(document.getElementById("taskPay").value || 0);
 
         const doneTotalHours = doneHours + doneMins/60;
-        const currentEarnings = doneTotalHours * hourlyPay * 1.37;
+        const currentEarnings = doneTotalHours * hourlyPay * 1.37  * 0.955; // 1.37 is the conversion rate, and 0.955 is the paypalfee 
         
         const currData = await loadData();
         const stateData = await getFromDB("state", "mainState") || { 
