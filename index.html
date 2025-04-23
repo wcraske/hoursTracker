@@ -116,15 +116,27 @@
       spinner.style.strokeDashoffset = `${2 * Math.PI * 45 * (1 - (displayTime / 1000) % 60 / 60)}`;
     };
 
+    // Function to handle the confirmation when exiting
+    const confirmExit = (e) => {
+      if (running) {
+        // Standard message for beforeunload event
+        const message = "Timer is still running! Are you sure you want to leave?";
+        e.returnValue = message;
+        return message;
+      }
+    };
+
     const toggleStopwatch = () => {
       if (!running) {
         stopwatchStartTime = Date.now();
         stopwatchInterval = setInterval(updateStopwatch, 50);
+        window.addEventListener('beforeunload', confirmExit);
       } else {
         elapsedTime += Date.now() - stopwatchStartTime;
         stopwatchStartTime = null;
         clearInterval(stopwatchInterval);
         loadData(); // Restore debt title
+        window.removeEventListener('beforeunload', confirmExit);
       }
       running = !running;
       updateStopwatch();
@@ -195,6 +207,9 @@
         clearInterval(stopwatchInterval);
         updateStopwatch();
         loadData();
+        
+        // Make sure we remove the event listener when timer is reset
+        window.removeEventListener('beforeunload', confirmExit);
       });
 
       updateCountdown();
