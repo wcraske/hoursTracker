@@ -45,7 +45,9 @@
     };
     
     const updateHoursLeftDisplay = (hoursLeft) => {
-      document.getElementById("hoursLeft").innerText = `${hoursLeft.toFixed(1)} hrs`;
+      const hours = Math.floor(hoursLeft);
+      const minutes = Math.round((hoursLeft - hours) * 60);
+      document.getElementById("hoursLeft").innerText = `${hours} hrs ${minutes} mins`;
     };
 
     const loadData = async () => {
