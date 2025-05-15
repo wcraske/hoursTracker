@@ -7,7 +7,7 @@
   <title>Debt Tracker</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script defer>
-    const dailyHours = { 0: 1, 1: 2, 2: 2, 3: 2, 4: 2, 5: 1, 6: 1 };
+    const dailyHours = { 0: 1, 1: 1, 2: 2, 3: 2, 4: 2, 5: 2, 6: 1 };
     const getTodayKey = () => new Date().toLocaleDateString("en-CA");
     let db, stopwatchInterval, stopwatchStartTime = null, elapsedTime = 0, running = false;
     
