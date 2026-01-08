@@ -7,280 +7,65 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     .day-box { position: relative; }
-    .day-tooltip {
-      position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
-      background: rgba(0,0,0,0.9); color: white; padding: 0.5rem; border-radius: 0.5rem;
-      font-size: 0.75rem; white-space: nowrap; pointer-events: none; opacity: 0;
-      transition: opacity 0.2s; margin-bottom: 0.5rem; z-index: 10;
-    }
+    .day-tooltip { position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.9); color: white; padding: 0.5rem; border-radius: 0.5rem; font-size: 0.75rem; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 0.2s; margin-bottom: 0.5rem; z-index: 10; }
     .day-box:hover .day-tooltip { opacity: 1; }
     .modal-backdrop { backdrop-filter: blur(8px); }
-    .modal-content {
-      animation: modalPop 0.3s ease-out;
-    }
-    @keyframes modalPop {
-      0% { transform: scale(0.7); opacity: 0; }
-      100% { transform: scale(1); opacity: 1; }
-    }
+    .modal-content { animation: modalPop 0.3s ease-out; }
+    @keyframes modalPop { 0% { transform: scale(0.7); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
   </style>
   <script defer>
     const WEEKLY_GOAL = 300;
-    let db, stopwatchInterval, stopwatchStartTime = null, elapsedTime = 0, running = false;
-    let lastEarning = 0, canUndo = false;
-
-    const getStartOfWeek = d => {
-      const date = new Date(d);
-      const day = date.getDay() || 7;
-      if (day !== 1) date.setDate(date.getDate() - (day - 1));
-      date.setHours(0, 0, 0, 0);
-      return date;
-    };
-
+    let db, stopwatchInterval, stopwatchStartTime = null, elapsedTime = 0, running = false, lastEarning = 0, canUndo = false, leetcodeState = [false, false, false, false];
+    const getStartOfWeek = d => { const date = new Date(d); const day = date.getDay() || 7; if (day !== 1) date.setDate(date.getDate() - (day - 1)); date.setHours(0, 0, 0, 0); return date; };
     const cycleAnchor = getStartOfWeek(new Date());
-    const getWeekOfCycle = () => {
-      const now = getStartOfWeek(new Date());
-      const diffWeeks = Math.floor((now - cycleAnchor) / (7 * 86400000));
-      return ((diffWeeks % 4) + 4) % 4 + 1;
-    };
+    const getWeekOfCycle = () => { const now = getStartOfWeek(new Date()); const diffWeeks = Math.floor((now - cycleAnchor) / (7 * 86400000)); return ((diffWeeks % 4) + 4) % 4 + 1; };
     const getWeekKey = (weekNum) => `${new Date().getFullYear()}-W${weekNum || getWeekOfCycle()}`;
     const getDayKey = d => d.toISOString().split('T')[0];
-
-    const openDB = () => new Promise((res, rej) => {
-      const req = indexedDB.open("weeklyEarningsDB", 2);
-      req.onupgradeneeded = e => {
-        db = e.target.result;
-        if (!db.objectStoreNames.contains("weeks")) db.createObjectStore("weeks", { keyPath: "week" });
-        if (!db.objectStoreNames.contains("days")) db.createObjectStore("days", { keyPath: "date" });
-      };
-      req.onsuccess = e => { db = e.target.result; res(); };
-      req.onerror = rej;
-    });
-
-    const getData = (store, key) => new Promise(res => {
-      const req = db.transaction(store, "readonly").objectStore(store).get(key);
-      req.onsuccess = () => res(req.result || (store === "weeks" ? { week: key, total: 0 } : { date: key, earnings: 0 }));
-    });
-
-    const saveData = (store, data) => new Promise(res => {
-      const tx = db.transaction(store, "readwrite");
-      tx.objectStore(store).put(data);
-      tx.oncomplete = res;
-    });
-
-    const updateWeeklyDisplay = total => {
-      document.getElementById("weeklyTotal").innerText = `${total.toFixed(2)} CAD`;
-      document.getElementById("progressBar").style.width = `${Math.min((total / WEEKLY_GOAL) * 100, 100)}%`;
-      document.getElementById("remaining").innerText = `${Math.max(0, WEEKLY_GOAL - total).toFixed(2)} CAD`;
-      const btn = document.getElementById("undoBtn");
-      btn.disabled = !canUndo;
-      btn.classList.toggle("opacity-50", !canUndo);
-      btn.classList.toggle("cursor-not-allowed", !canUndo);
-    };
-
-    const updateCalendar = async () => {
-      const start = getStartOfWeek(new Date());
-      const cal = document.getElementById("weekCalendar");
-      cal.innerHTML = "";
-      const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-      
-      for (let i = 0; i < 7; i++) {
-        const date = new Date(start);
-        date.setDate(start.getDate() + i);
-        const data = await getData("days", getDayKey(date));
-        const box = document.createElement("div");
-        box.className = "day-box flex flex-col items-center justify-center h-16 rounded-lg transition-all cursor-pointer";
-        
-        if (data.earnings > 0) {
-          const intensity = Math.min(data.earnings / 100, 1);
-          box.style.backgroundColor = `rgb(34, ${Math.floor(100 + intensity * 155)}, 34)`;
-          box.classList.add("text-white");
-        } else {
-          box.classList.add("bg-gray-200");
-        }
-        
-        const tooltip = document.createElement("div");
-        tooltip.className = "day-tooltip";
-        tooltip.innerText = data.earnings > 0 ? `${days[i]}: ${data.earnings.toFixed(2)} CAD` : `${days[i]}: No earnings`;
-        const label = document.createElement("div");
-        label.className = "text-xs font-semibold";
-        label.innerText = days[i];
-        box.appendChild(tooltip);
-        box.appendChild(label);
-        cal.appendChild(box);
-      }
-    };
-
-    const updateStopwatch = () => {
-      const time = elapsedTime + (running && stopwatchStartTime ? Date.now() - stopwatchStartTime : 0);
-      const sec = Math.floor(time / 1000);
-      const hrs = Math.floor(sec / 3600), mins = Math.floor(sec / 60) % 60, secs = sec % 60;
-      const ms = Math.floor((time % 1000) / 10);
-      const str = `${hrs > 0 ? hrs + ":" : ""}${mins}:${secs.toString().padStart(2, "0")}.${ms.toString().padStart(2, "0")}`;
-      document.getElementById("stopwatchTime").innerText = str;
-      if (running) document.title = hrs > 0 ? `${hrs}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}` : `${mins}:${secs.toString().padStart(2, "0")}`;
-    };
-
-    const toggleStopwatch = () => {
-      if (!running) {
-        stopwatchStartTime = Date.now();
-        stopwatchInterval = setInterval(updateStopwatch, 50);
-      } else {
-        elapsedTime += Date.now() - stopwatchStartTime;
-        stopwatchStartTime = null;
-        clearInterval(stopwatchInterval);
-        document.title = "Weekly Earnings Tracker";
-      }
-      running = !running;
-      updateStopwatch();
-    };
-
-    window.onload = async () => {
-      await openDB();
-      document.getElementById("weekLabel").innerText = `Week ${getWeekOfCycle()}`;
-      const weekKey = getWeekKey();
-      const weekData = await getData("weeks", weekKey);
-      updateWeeklyDisplay(weekData.total);
-      await updateCalendar();
-
-      document.getElementById("addEarningsBtn").onclick = async () => {
-        const cad = parseFloat(document.getElementById("usdInput").value || "0") * 1.37 * 0.955;
-        lastEarning = cad;
-        weekData.total += cad;
-        const today = getDayKey(new Date());
-        const dayData = await getData("days", today);
-        dayData.earnings += cad;
-        await saveData("days", dayData);
-        await saveData("weeks", weekData);
-        canUndo = true;
-        updateWeeklyDisplay(weekData.total);
-        await updateCalendar();
-        document.getElementById("usdInput").value = "";
-      };
-
-      document.getElementById("undoBtn").onclick = async () => {
-        if (!canUndo) return;
-        weekData.total = Math.max(0, weekData.total - lastEarning);
-        const today = getDayKey(new Date());
-        const dayData = await getData("days", today);
-        dayData.earnings = Math.max(0, dayData.earnings - lastEarning);
-        await saveData("days", dayData);
-        canUndo = false;
-        lastEarning = 0;
-        await saveData("weeks", weekData);
-        updateWeeklyDisplay(weekData.total);
-        await updateCalendar();
-      };
-
-      document.getElementById("resetWeekBtn").onclick = async () => {
-        weekData.total = 0;
-        canUndo = false;
-        lastEarning = 0;
-        const start = getStartOfWeek(new Date());
-        for (let i = 0; i < 7; i++) {
-          const date = new Date(start);
-          date.setDate(start.getDate() + i);
-          await saveData("days", { date: getDayKey(date), earnings: 0 });
-        }
-        await saveData("weeks", weekData);
-        updateWeeklyDisplay(0);
-        await updateCalendar();
-      };
-
-      const showHistory = async () => {
-        const modal = document.getElementById("historyModal");
-        const list = document.getElementById("historyList");
-        list.innerHTML = "";
-        
-        const currentWeek = getWeekOfCycle();
-        for (let i = 1; i <= 4; i++) {
-          const data = await getData("weeks", getWeekKey(i));
-          const item = document.createElement("div");
-          item.className = "flex justify-between items-center p-4 bg-gray-50 rounded-lg mb-2";
-          item.innerHTML = `
-            <span class="font-semibold ${i === currentWeek ? 'text-blue-600' : 'text-gray-700'}">
-              Week ${i} ${i === currentWeek ? '(Current)' : ''}
-            </span>
-            <span class="text-gray-800 font-bold">${data.total.toFixed(2)} CAD</span>
-          `;
-          list.appendChild(item);
-        }
-        modal.classList.remove("hidden");
-      };
-
-      document.getElementById("historyBtn").onclick = showHistory;
-      document.getElementById("closeModal").onclick = () => {
-        document.getElementById("historyModal").classList.add("hidden");
-      };
-      document.getElementById("historyModal").onclick = (e) => {
-        if (e.target.id === "historyModal") {
-          document.getElementById("historyModal").classList.add("hidden");
-        }
-      };
-
-      document.getElementById("resetAllWeeksBtn").onclick = async () => {
-        if (!confirm("Are you sure you want to reset ALL weeks? This cannot be undone!")) return;
-        
-        // Reset all 4 weeks
-        for (let i = 1; i <= 4; i++) {
-          await saveData("weeks", { week: getWeekKey(i), total: 0 });
-        }
-        
-        // Reset all days in current week
-        const start = getStartOfWeek(new Date());
-        for (let i = 0; i < 7; i++) {
-          const date = new Date(start);
-          date.setDate(start.getDate() + i);
-          await saveData("days", { date: getDayKey(date), earnings: 0 });
-        }
-        
-        // Reset current state
-        weekData.total = 0;
-        canUndo = false;
-        lastEarning = 0;
-        
-        // Update display
-        updateWeeklyDisplay(0);
-        await updateCalendar();
-        
-        // Close modal and refresh history
-        document.getElementById("historyModal").classList.add("hidden");
-        showHistory();
-      };
-
-      document.getElementById("playPauseBtn").onclick = toggleStopwatch;
-      document.getElementById("resetBtn").onclick = () => {
-        elapsedTime = 0;
-        running = false;
-        stopwatchStartTime = null;
-        clearInterval(stopwatchInterval);
-        document.title = "Weekly Earnings Tracker";
-        updateStopwatch();
-      };
-    };
+    const openDB = () => new Promise((res, rej) => { const req = indexedDB.open("weeklyEarningsDB", 3); req.onupgradeneeded = e => { db = e.target.result; if (!db.objectStoreNames.contains("weeks")) db.createObjectStore("weeks", { keyPath: "week" }); if (!db.objectStoreNames.contains("days")) db.createObjectStore("days", { keyPath: "date" }); if (!db.objectStoreNames.contains("leetcode")) db.createObjectStore("leetcode", { keyPath: "week" }); }; req.onsuccess = e => { db = e.target.result; res(); }; req.onerror = rej; });
+    const getData = (store, key) => new Promise(res => { const req = db.transaction(store, "readonly").objectStore(store).get(key); req.onsuccess = () => res(req.result || (store === "weeks" ? { week: key, total: 0 } : store === "days" ? { date: key, earnings: 0 } : { week: key, state: [false, false, false, false] })); });
+    const saveData = (store, data) => new Promise(res => { const tx = db.transaction(store, "readwrite"); tx.objectStore(store).put(data); tx.oncomplete = res; });
+    const updateWeeklyDisplay = total => { document.getElementById("weeklyTotal").innerText = `${total.toFixed(2)} CAD`; document.getElementById("progressBar").style.width = `${Math.min((total / WEEKLY_GOAL) * 100, 100)}%`; document.getElementById("remaining").innerText = `${Math.max(0, WEEKLY_GOAL - total).toFixed(2)} CAD`; const btn = document.getElementById("undoBtn"); btn.disabled = !canUndo; btn.classList.toggle("opacity-50", !canUndo); btn.classList.toggle("cursor-not-allowed", !canUndo); };
+    const updateCalendar = async () => { const start = getStartOfWeek(new Date()); const cal = document.getElementById("weekCalendar"); cal.innerHTML = ""; const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']; for (let i = 0; i < 7; i++) { const date = new Date(start); date.setDate(start.getDate() + i); const data = await getData("days", getDayKey(date)); const box = document.createElement("div"); box.className = "day-box flex flex-col items-center justify-center h-16 rounded-lg transition-all cursor-pointer"; if (data.earnings > 0) { const intensity = Math.min(data.earnings / 100, 1); box.style.backgroundColor = `rgb(${Math.floor(59 + intensity * 20)}, ${Math.floor(130 + intensity * 20)}, ${Math.floor(246 + intensity * 9)})`; box.classList.add("text-white"); } else { box.classList.add("bg-gray-200"); } const tooltip = document.createElement("div"); tooltip.className = "day-tooltip"; tooltip.innerText = data.earnings > 0 ? `${days[i]}: ${data.earnings.toFixed(2)} CAD` : `${days[i]}: No earnings`; const label = document.createElement("div"); label.className = "text-xs font-semibold"; label.innerText = days[i]; box.appendChild(tooltip); box.appendChild(label); cal.appendChild(box); } };
+    const updateStopwatch = () => { const time = elapsedTime + (running && stopwatchStartTime ? Date.now() - stopwatchStartTime : 0); const sec = Math.floor(time / 1000); const hrs = Math.floor(sec / 3600), mins = Math.floor(sec / 60) % 60, secs = sec % 60, ms = Math.floor((time % 1000) / 10); const str = `${hrs > 0 ? hrs + ":" : ""}${mins}:${secs.toString().padStart(2, "0")}.${ms.toString().padStart(2, "0")}`; document.getElementById("stopwatchTime").innerText = str; if (running) document.title = hrs > 0 ? `${hrs}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}` : `${mins}:${secs.toString().padStart(2, "0")}`; };
+    const toggleStopwatch = () => { if (!running) { stopwatchStartTime = Date.now(); stopwatchInterval = setInterval(updateStopwatch, 50); } else { elapsedTime += Date.now() - stopwatchStartTime; stopwatchStartTime = null; clearInterval(stopwatchInterval); document.title = "Weekly Earnings Tracker"; } running = !running; updateStopwatch(); };
+    const updateLeetcodeGrid = () => { const grid = document.getElementById("leetcodeGrid"); grid.innerHTML = ""; for (let i = 0; i < 4; i++) { const box = document.createElement("div"); box.className = `h-16 rounded-lg flex items-center justify-center cursor-pointer transition-all ${leetcodeState[i] ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-600'}`; box.innerHTML = `<span class="text-2xl">${leetcodeState[i] ? '✓' : i + 1}</span>`; box.onclick = async () => { leetcodeState[i] = !leetcodeState[i]; await saveData("leetcode", { week: getWeekKey(), state: leetcodeState }); updateLeetcodeGrid(); }; grid.appendChild(box); } };
+    window.onload = async () => { await openDB(); document.getElementById("weekLabel").innerText = `Week ${getWeekOfCycle()}`; const weekKey = getWeekKey(); const weekData = await getData("weeks", weekKey); updateWeeklyDisplay(weekData.total); await updateCalendar(); const leetcodeData = await getData("leetcode", getWeekKey()); if (leetcodeData.state) leetcodeState = leetcodeData.state; updateLeetcodeGrid(); document.getElementById("addEarningsBtn").onclick = async () => { const cad = parseFloat(document.getElementById("usdInput").value || "0") * 1.37 * 0.955; lastEarning = cad; weekData.total += cad; const today = getDayKey(new Date()); const dayData = await getData("days", today); dayData.earnings += cad; await saveData("days", dayData); await saveData("weeks", weekData); canUndo = true; updateWeeklyDisplay(weekData.total); await updateCalendar(); document.getElementById("usdInput").value = ""; }; document.getElementById("undoBtn").onclick = async () => { if (!canUndo) return; weekData.total = Math.max(0, weekData.total - lastEarning); const today = getDayKey(new Date()); const dayData = await getData("days", today); dayData.earnings = Math.max(0, dayData.earnings - lastEarning); await saveData("days", dayData); canUndo = false; lastEarning = 0; await saveData("weeks", weekData); updateWeeklyDisplay(weekData.total); await updateCalendar(); }; document.getElementById("resetWeekBtn").onclick = async () => { weekData.total = 0; canUndo = false; lastEarning = 0; const start = getStartOfWeek(new Date()); for (let i = 0; i < 7; i++) { const date = new Date(start); date.setDate(start.getDate() + i); await saveData("days", { date: getDayKey(date), earnings: 0 }); } await saveData("weeks", weekData); updateWeeklyDisplay(0); await updateCalendar(); }; const showHistory = async () => { const modal = document.getElementById("historyModal"); const list = document.getElementById("historyList"); list.innerHTML = ""; const currentWeek = getWeekOfCycle(); for (let i = 1; i <= 4; i++) { const data = await getData("weeks", getWeekKey(i)); const item = document.createElement("div"); item.className = "flex justify-between items-center p-4 bg-gray-50 rounded-lg mb-2"; item.innerHTML = `<span class="font-semibold ${i === currentWeek ? 'text-blue-600' : 'text-gray-700'}">Week ${i} ${i === currentWeek ? '(Current)' : ''}</span><span class="text-gray-800 font-bold">${data.total.toFixed(2)} CAD</span>`; list.appendChild(item); } modal.classList.remove("hidden"); }; document.getElementById("historyBtn").onclick = showHistory; document.getElementById("closeModal").onclick = () => { document.getElementById("historyModal").classList.add("hidden"); }; document.getElementById("historyModal").onclick = (e) => { if (e.target.id === "historyModal") { document.getElementById("historyModal").classList.add("hidden"); } }; document.getElementById("resetAllWeeksBtn").onclick = async () => { for (let i = 1; i <= 4; i++) { await saveData("weeks", { week: getWeekKey(i), total: 0 }); } const start = getStartOfWeek(new Date()); for (let i = 0; i < 7; i++) { const date = new Date(start); date.setDate(start.getDate() + i); await saveData("days", { date: getDayKey(date), earnings: 0 }); } weekData.total = 0; canUndo = false; lastEarning = 0; updateWeeklyDisplay(0); await updateCalendar(); document.getElementById("historyModal").classList.add("hidden"); showHistory(); }; document.getElementById("playPauseBtn").onclick = toggleStopwatch; document.getElementById("resetBtn").onclick = () => { elapsedTime = 0; running = false; stopwatchStartTime = null; clearInterval(stopwatchInterval); document.title = "Weekly Earnings Tracker"; updateStopwatch(); }; document.getElementById("clearLeetcodeBtn").onclick = async () => { leetcodeState = [false, false, false, false]; await saveData("leetcode", { week: getWeekKey(), state: leetcodeState }); updateLeetcodeGrid(); }; };
   </script>
 </head>
 <body class="bg-gray-100 min-h-screen flex items-center justify-center p-6">
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full max-w-7xl">
+    <!-- Column 1: Weekly Earnings -->
     <div class="bg-white shadow-lg rounded-2xl p-8 text-center transform transition hover:scale-105">
       <h1 class="text-3xl font-bold text-gray-800 mb-1">Weekly Earnings</h1>
       <div id="weekLabel" class="text-sm text-gray-400 mb-4">Week 1</div>
       <div id="weeklyTotal" class="text-4xl font-semibold text-blue-600 mb-4">0.00 CAD</div>
-      <div class="w-full bg-gray-200 rounded-full h-4 mb-4">
-        <div id="progressBar" class="bg-blue-500 h-4 rounded-full w-0 transition-all"></div>
-      </div>
+      <div class="w-full bg-gray-200 rounded-full h-4 mb-4"><div id="progressBar" class="bg-blue-500 h-4 rounded-full w-0 transition-all"></div></div>
       <p class="text-gray-600 mb-4">Remaining: <span id="remaining">300.00 CAD</span></p>
       <input id="usdInput" type="number" placeholder="USD earned" class="w-full p-3 border rounded-xl mb-4 text-lg" />
       <button id="addEarningsBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl transition-all w-full mb-3">Add Earnings</button>
       <button id="undoBtn" class="bg-gray-400 hover:bg-gray-500 active:scale-95 text-white font-bold py-2 px-5 rounded-xl transition-all w-full opacity-50 cursor-not-allowed" disabled>Undo Last Entry</button>
     </div>
-    <div class="bg-white shadow-lg rounded-2xl p-8 text-center transform transition hover:scale-105">
-      <h1 class="text-3xl font-bold text-gray-800 mb-6">Stopwatch</h1>
-      <div id="stopwatchTime" class="text-4xl font-bold text-blue-600 mb-6">0:00.00</div>
-      <div class="flex justify-center gap-4">
-        <button id="playPauseBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl transition-all">Play / Pause</button>
-        <button id="resetBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl transition-all">Reset</button>
+
+    <!-- Column 2: Stopwatch + LeetCode Tracker -->
+    <div class="flex flex-col gap-6">
+      <div class="bg-white shadow-lg rounded-2xl p-8 text-center transform transition hover:scale-105">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6">Stopwatch</h1>
+        <div id="stopwatchTime" class="text-4xl font-bold text-blue-600 mb-6">0:00.00</div>
+        <div class="flex justify-center gap-4">
+          <button id="playPauseBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl transition-all">Play / Pause</button>
+          <button id="resetBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl transition-all">Reset</button>
+        </div>
+      </div>
+
+      <div class="bg-white shadow-lg rounded-2xl p-8 text-center transform transition hover:scale-105">
+        <h1 class="text-3xl font-bold text-gray-800 mb-4">LeetCode Tracker</h1>
+        <p class="text-gray-600 text-sm mb-4">Weekly Goal: 4 Problems</p>
+        <div id="leetcodeGrid" class="grid grid-cols-2 gap-4 mb-6"></div>
+        <button id="clearLeetcodeBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl transition-all w-full">Clear All</button>
       </div>
     </div>
+
+    <!-- Column 3: Weekly Stats -->
     <div class="bg-white shadow-lg rounded-2xl p-8 text-center transform transition hover:scale-105">
       <h1 class="text-3xl font-bold text-gray-800 mb-4">Weekly Stats</h1>
       <div class="mb-6">
@@ -292,7 +77,6 @@
       <button id="resetWeekBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl transition-all w-full">Reset Current Week</button>
     </div>
   </div>
-
   <div id="historyModal" class="hidden fixed inset-0 bg-black bg-opacity-50 modal-backdrop flex items-center justify-center p-6 z-50">
     <div class="modal-content bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl">
       <div class="flex justify-between items-center mb-6">
