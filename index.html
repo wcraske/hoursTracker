@@ -1,314 +1,305 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <link rel="icon" type="image/png" href="favicon.png" />
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Debt Tracker</title>
+  <title>Weekly Earnings Tracker</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .day-box { position: relative; }
+    .day-tooltip {
+      position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.9); color: white; padding: 0.5rem; border-radius: 0.5rem;
+      font-size: 0.75rem; white-space: nowrap; pointer-events: none; opacity: 0;
+      transition: opacity 0.2s; margin-bottom: 0.5rem; z-index: 10;
+    }
+    .day-box:hover .day-tooltip { opacity: 1; }
+    .modal-backdrop { backdrop-filter: blur(8px); }
+    .modal-content {
+      animation: modalPop 0.3s ease-out;
+    }
+    @keyframes modalPop {
+      0% { transform: scale(0.7); opacity: 0; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+  </style>
   <script defer>
-    const dailyHours = { 0: 1, 1: 1, 2: 2, 3: 2, 4: 2, 5: 2, 6: 1 };
-    const getTodayKey = () => new Date().toLocaleDateString("en-CA");
+    const WEEKLY_GOAL = 300;
     let db, stopwatchInterval, stopwatchStartTime = null, elapsedTime = 0, running = false;
-    
-    const openDB = () => new Promise((resolve, reject) => {
-      const request = indexedDB.open("debtTrackerDB", 1);
-      request.onupgradeneeded = e => {
+    let lastEarning = 0, canUndo = false;
+
+    const getStartOfWeek = d => {
+      const date = new Date(d);
+      const day = date.getDay() || 7;
+      if (day !== 1) date.setDate(date.getDate() - (day - 1));
+      date.setHours(0, 0, 0, 0);
+      return date;
+    };
+
+    const cycleAnchor = getStartOfWeek(new Date());
+    const getWeekOfCycle = () => {
+      const now = getStartOfWeek(new Date());
+      const diffWeeks = Math.floor((now - cycleAnchor) / (7 * 86400000));
+      return ((diffWeeks % 4) + 4) % 4 + 1;
+    };
+    const getWeekKey = (weekNum) => `${new Date().getFullYear()}-W${weekNum || getWeekOfCycle()}`;
+    const getDayKey = d => d.toISOString().split('T')[0];
+
+    const openDB = () => new Promise((res, rej) => {
+      const req = indexedDB.open("weeklyEarningsDB", 2);
+      req.onupgradeneeded = e => {
         db = e.target.result;
-        db.createObjectStore("state", { keyPath: "key" });
-        db.createObjectStore("logs", { keyPath: "date" });
+        if (!db.objectStoreNames.contains("weeks")) db.createObjectStore("weeks", { keyPath: "week" });
+        if (!db.objectStoreNames.contains("days")) db.createObjectStore("days", { keyPath: "date" });
       };
-      request.onsuccess = e => { db = e.target.result; resolve(db); };
-      request.onerror = () => reject("IndexedDB failed to open.");
+      req.onsuccess = e => { db = e.target.result; res(); };
+      req.onerror = rej;
     });
 
-    const saveToDB = (storeName, data) => new Promise(resolve => {
-      const tx = db.transaction(storeName, "readwrite");
-      tx.objectStore(storeName).put(data);
-      tx.oncomplete = resolve;
+    const getData = (store, key) => new Promise(res => {
+      const req = db.transaction(store, "readonly").objectStore(store).get(key);
+      req.onsuccess = () => res(req.result || (store === "weeks" ? { week: key, total: 0 } : { date: key, earnings: 0 }));
     });
 
-    const getFromDB = (storeName, key) => new Promise(resolve => {
-      const tx = db.transaction(storeName, "readonly");
-      const request = tx.objectStore(storeName).get(key);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => resolve(null);
+    const saveData = (store, data) => new Promise(res => {
+      const tx = db.transaction(store, "readwrite");
+      tx.objectStore(store).put(data);
+      tx.oncomplete = res;
     });
 
-    const updateDisplay = (hours, mins) => {
-      document.getElementById("debtHoursValue").innerText = `${hours} hrs ${mins} mins`;
-      if (!running) document.title = `Debt: ${hours}h ${mins}m`;
+    const updateWeeklyDisplay = total => {
+      document.getElementById("weeklyTotal").innerText = `${total.toFixed(2)} CAD`;
+      document.getElementById("progressBar").style.width = `${Math.min((total / WEEKLY_GOAL) * 100, 100)}%`;
+      document.getElementById("remaining").innerText = `${Math.max(0, WEEKLY_GOAL - total).toFixed(2)} CAD`;
+      const btn = document.getElementById("undoBtn");
+      btn.disabled = !canUndo;
+      btn.classList.toggle("opacity-50", !canUndo);
+      btn.classList.toggle("cursor-not-allowed", !canUndo);
     };
 
-    const updateDailyDisplay = (earnings) => {
-      document.getElementById("cadEarnings").innerText = `${earnings.toFixed(2)} CAD`;
-    };
-    
-    const updateHoursLeftDisplay = (hoursLeft) => {
-      const hours = Math.floor(hoursLeft);
-      const minutes = Math.round((hoursLeft - hours) * 60);
-      document.getElementById("hoursLeft").innerText = `${hours} hrs ${minutes} mins`;
-    };
-
-    const loadData = async () => {
-      const today = getTodayKey();
-      const state = await getFromDB("state", "mainState") || { 
-        debtHours: 0, 
-        debtMinutes: 0, 
-        lastUpdate: "",
-        totalEarnings: 0,
-        dailyHoursLeft: 0
-      };
+    const updateCalendar = async () => {
+      const start = getStartOfWeek(new Date());
+      const cal = document.getElementById("weekCalendar");
+      cal.innerHTML = "";
+      const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
       
-      let { debtHours: hours, debtMinutes: mins, lastUpdate, totalEarnings, dailyHoursLeft } = state;
-
-      if (lastUpdate !== today) {
-        hours += dailyHours[new Date().getDay()];
-        totalEarnings = 0;
-        dailyHoursLeft = dailyHours[new Date().getDay()];
-        await saveToDB("state", { 
-          key: "mainState", 
-          debtHours: hours, 
-          debtMinutes: mins, 
-          lastUpdate: today,
-          totalEarnings: 0,
-          dailyHoursLeft: dailyHoursLeft
-        });
+      for (let i = 0; i < 7; i++) {
+        const date = new Date(start);
+        date.setDate(start.getDate() + i);
+        const data = await getData("days", getDayKey(date));
+        const box = document.createElement("div");
+        box.className = "day-box flex flex-col items-center justify-center h-16 rounded-lg transition-all cursor-pointer";
+        
+        if (data.earnings > 0) {
+          const intensity = Math.min(data.earnings / 100, 1);
+          box.style.backgroundColor = `rgb(34, ${Math.floor(100 + intensity * 155)}, 34)`;
+          box.classList.add("text-white");
+        } else {
+          box.classList.add("bg-gray-200");
+        }
+        
+        const tooltip = document.createElement("div");
+        tooltip.className = "day-tooltip";
+        tooltip.innerText = data.earnings > 0 ? `${days[i]}: ${data.earnings.toFixed(2)} CAD` : `${days[i]}: No earnings`;
+        const label = document.createElement("div");
+        label.className = "text-xs font-semibold";
+        label.innerText = days[i];
+        box.appendChild(tooltip);
+        box.appendChild(label);
+        cal.appendChild(box);
       }
-      
-      updateDisplay(hours, mins);
-      updateDailyDisplay(totalEarnings || 0);
-      updateHoursLeftDisplay(dailyHoursLeft || 0);
-      
-      return { hours, mins, totalEarnings, dailyHoursLeft };
-    };
-
-    const saveState = async (hours, mins, earnings, hoursLeft) => {
-      await saveToDB("state", {
-        key: "mainState", 
-        debtHours: hours, 
-        debtMinutes: mins, 
-        lastUpdate: getTodayKey(),
-        totalEarnings: earnings,
-        dailyHoursLeft: hoursLeft
-      });
-      updateDisplay(hours, mins);
-      updateHoursLeftDisplay(hoursLeft);
-    };
-
-    const updateCountdown = () => {
-      const now = new Date();
-      const tomorrow = new Date(now);
-      tomorrow.setHours(24, 0, 0, 0);
-      const diff = tomorrow - now;
-      const hours = Math.floor(diff / 3600000);
-      const minutes = Math.floor((diff % 3600000) / 60000);
-      const seconds = Math.floor((diff % 60000) / 1000);
-      document.getElementById("countdown").innerText = `Next update in: ${hours}h ${minutes}m ${seconds}s`;
     };
 
     const updateStopwatch = () => {
-      let displayTime = elapsedTime + (running && stopwatchStartTime ? Date.now() - stopwatchStartTime : 0);
-      const totalSeconds = Math.floor(displayTime / 1000);
-      const mins = Math.floor(totalSeconds / 60) % 60;
-      const secs = totalSeconds % 60;
-      const millis = Math.floor((displayTime % 1000) / 10);
-      const hrs = Math.floor(totalSeconds / 3600);
-
-      const timeString = `${hrs > 0 ? hrs + ":" : ""}${mins}:${secs.toString().padStart(2, "0")}.${millis.toString().padStart(2, "0")}`;
-      document.getElementById("stopwatchTime").innerText = timeString;
-
-      if (running) {
-        document.title = hrs > 0 ? 
-          `${hrs}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}` : 
-          `${mins}:${secs.toString().padStart(2, "0")}`;
-      }
-
-      const spinner = document.getElementById("spinnerCircle");
-      spinner.style.strokeDashoffset = `${2 * Math.PI * 45 * (1 - (displayTime / 1000) % 60 / 60)}`;
-    };
-
-    // Function to handle the confirmation when exiting
-    const confirmExit = (e) => {
-      if (running) {
-        // Standard message for beforeunload event
-        const message = "Timer is still running! Are you sure you want to leave?";
-        e.returnValue = message;
-        return message;
-      }
+      const time = elapsedTime + (running && stopwatchStartTime ? Date.now() - stopwatchStartTime : 0);
+      const sec = Math.floor(time / 1000);
+      const hrs = Math.floor(sec / 3600), mins = Math.floor(sec / 60) % 60, secs = sec % 60;
+      const ms = Math.floor((time % 1000) / 10);
+      const str = `${hrs > 0 ? hrs + ":" : ""}${mins}:${secs.toString().padStart(2, "0")}.${ms.toString().padStart(2, "0")}`;
+      document.getElementById("stopwatchTime").innerText = str;
+      if (running) document.title = hrs > 0 ? `${hrs}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}` : `${mins}:${secs.toString().padStart(2, "0")}`;
     };
 
     const toggleStopwatch = () => {
       if (!running) {
         stopwatchStartTime = Date.now();
         stopwatchInterval = setInterval(updateStopwatch, 50);
-        window.addEventListener('beforeunload', confirmExit);
       } else {
         elapsedTime += Date.now() - stopwatchStartTime;
         stopwatchStartTime = null;
         clearInterval(stopwatchInterval);
-        loadData(); // Restore debt title
-        window.removeEventListener('beforeunload', confirmExit);
+        document.title = "Weekly Earnings Tracker";
       }
       running = !running;
       updateStopwatch();
     };
-    
+
     window.onload = async () => {
-      if (navigator.storage?.persist) await navigator.storage.persist();
       await openDB();
-      document.getElementById("mainContainer").classList.remove("opacity-0", "translate-y-5");
-      
-      const { hours, mins, totalEarnings, dailyHoursLeft } = await loadData();
-      
-      document.getElementById("editBtn").addEventListener("click", async () => {
-        const newHours = prompt("Enter new debt hours:", hours);
-        const newMins = prompt("Enter new debt minutes:", mins);
-        if (newHours !== null && !isNaN(parseFloat(newHours)) && newMins !== null && !isNaN(parseInt(newMins))) {
-          await saveState(parseFloat(newHours), parseInt(newMins), totalEarnings, dailyHoursLeft);
+      document.getElementById("weekLabel").innerText = `Week ${getWeekOfCycle()}`;
+      const weekKey = getWeekKey();
+      const weekData = await getData("weeks", weekKey);
+      updateWeeklyDisplay(weekData.total);
+      await updateCalendar();
+
+      document.getElementById("addEarningsBtn").onclick = async () => {
+        const cad = parseFloat(document.getElementById("usdInput").value || "0") * 1.37 * 0.955;
+        lastEarning = cad;
+        weekData.total += cad;
+        const today = getDayKey(new Date());
+        const dayData = await getData("days", today);
+        dayData.earnings += cad;
+        await saveData("days", dayData);
+        await saveData("weeks", weekData);
+        canUndo = true;
+        updateWeeklyDisplay(weekData.total);
+        await updateCalendar();
+        document.getElementById("usdInput").value = "";
+      };
+
+      document.getElementById("undoBtn").onclick = async () => {
+        if (!canUndo) return;
+        weekData.total = Math.max(0, weekData.total - lastEarning);
+        const today = getDayKey(new Date());
+        const dayData = await getData("days", today);
+        dayData.earnings = Math.max(0, dayData.earnings - lastEarning);
+        await saveData("days", dayData);
+        canUndo = false;
+        lastEarning = 0;
+        await saveData("weeks", weekData);
+        updateWeeklyDisplay(weekData.total);
+        await updateCalendar();
+      };
+
+      document.getElementById("resetWeekBtn").onclick = async () => {
+        weekData.total = 0;
+        canUndo = false;
+        lastEarning = 0;
+        const start = getStartOfWeek(new Date());
+        for (let i = 0; i < 7; i++) {
+          const date = new Date(start);
+          date.setDate(start.getDate() + i);
+          await saveData("days", { date: getDayKey(date), earnings: 0 });
         }
-      });
+        await saveData("weeks", weekData);
+        updateWeeklyDisplay(0);
+        await updateCalendar();
+      };
 
-      document.getElementById("doneBtn").addEventListener("click", async () => {
-        const doneHours = parseFloat(document.getElementById("doneHours").value || "0");
-        const doneMins = parseInt(document.getElementById("doneMinutes").value || "0");
-        const hourlyPay = parseFloat(document.getElementById("taskPay").value || 0);
-
-        const doneTotalHours = doneHours + doneMins/60;
-        const currentEarnings = doneTotalHours * hourlyPay * 1.37  * 0.955; // 1.37 is the conversion rate, and 0.955 is the paypalfee 
+      const showHistory = async () => {
+        const modal = document.getElementById("historyModal");
+        const list = document.getElementById("historyList");
+        list.innerHTML = "";
         
-        const currData = await loadData();
-        const stateData = await getFromDB("state", "mainState") || { 
-          debtHours: 0, 
-          debtMinutes: 0, 
-          lastUpdate: "",
-          totalEarnings: 0,
-          dailyHoursLeft: 0
-        };
-        
-        const totalEarnings = (stateData.totalEarnings || 0) + currentEarnings;
-        let totalMins = currData.hours * 60 + currData.mins - (doneHours * 60 + doneMins);
-        totalMins = Math.max(0, totalMins);
-        
-        const newHours = Math.floor(totalMins / 60);
-        const newMins = totalMins % 60;
-        
-        // Update hours left today
-        const newHoursLeft = Math.max(0, (stateData.dailyHoursLeft || 0) - doneTotalHours);
-        
-        await saveState(newHours, newMins, totalEarnings, newHoursLeft);
-        updateDailyDisplay(totalEarnings);
-
-        await saveToDB("logs", {
-          date: getTodayKey(),
-          debt: `${newHours} hrs ${newMins} mins`,
-          done: `${doneHours} hrs ${doneMins} mins`,
-          earnings: currentEarnings.toFixed(2),
-          hoursLeft: newHoursLeft.toFixed(1)
-        });
-      });
-
-      document.getElementById("resetEarningsBtn").addEventListener("click", async () => {
-        const stateData = await getFromDB("state", "mainState");
-        if (stateData) {
-          stateData.totalEarnings = 0;
-          await saveToDB("state", stateData);
-          updateDailyDisplay(0);
+        const currentWeek = getWeekOfCycle();
+        for (let i = 1; i <= 4; i++) {
+          const data = await getData("weeks", getWeekKey(i));
+          const item = document.createElement("div");
+          item.className = "flex justify-between items-center p-4 bg-gray-50 rounded-lg mb-2";
+          item.innerHTML = `
+            <span class="font-semibold ${i === currentWeek ? 'text-blue-600' : 'text-gray-700'}">
+              Week ${i} ${i === currentWeek ? '(Current)' : ''}
+            </span>
+            <span class="text-gray-800 font-bold">${data.total.toFixed(2)} CAD</span>
+          `;
+          list.appendChild(item);
         }
-      });
-      
-      document.getElementById("resetHoursLeftBtn").addEventListener("click", async () => {
-        const today = new Date().getDay();
-        const defaultHours = dailyHours[today];
-        const stateData = await getFromDB("state", "mainState");
-        if (stateData) {
-          stateData.dailyHoursLeft = defaultHours;
-          await saveToDB("state", stateData);
-          updateHoursLeftDisplay(defaultHours);
-        }
-      });
+        modal.classList.remove("hidden");
+      };
 
-      document.getElementById("playPauseBtn").addEventListener("click", toggleStopwatch);
-      document.getElementById("resetBtn").addEventListener("click", () => {
-        stopwatchStartTime = null;
+      document.getElementById("historyBtn").onclick = showHistory;
+      document.getElementById("closeModal").onclick = () => {
+        document.getElementById("historyModal").classList.add("hidden");
+      };
+      document.getElementById("historyModal").onclick = (e) => {
+        if (e.target.id === "historyModal") {
+          document.getElementById("historyModal").classList.add("hidden");
+        }
+      };
+
+   
+        // Reset all 4 weeks
+        for (let i = 1; i <= 4; i++) {
+          await saveData("weeks", { week: getWeekKey(i), total: 0 });
+        }
+        
+        // Reset all days in current week
+        const start = getStartOfWeek(new Date());
+        for (let i = 0; i < 7; i++) {
+          const date = new Date(start);
+          date.setDate(start.getDate() + i);
+          await saveData("days", { date: getDayKey(date), earnings: 0 });
+        }
+        
+        // Reset current state
+        weekData.total = 0;
+        canUndo = false;
+        lastEarning = 0;
+        
+        // Update display
+        updateWeeklyDisplay(0);
+        await updateCalendar();
+        
+        // Close modal and refresh history
+        document.getElementById("historyModal").classList.add("hidden");
+        showHistory();
+      };
+
+      document.getElementById("playPauseBtn").onclick = toggleStopwatch;
+      document.getElementById("resetBtn").onclick = () => {
         elapsedTime = 0;
         running = false;
+        stopwatchStartTime = null;
         clearInterval(stopwatchInterval);
+        document.title = "Weekly Earnings Tracker";
         updateStopwatch();
-        loadData();
-        
-        // Make sure we remove the event listener when timer is reset
-        window.removeEventListener('beforeunload', confirmExit);
-      });
-
-      updateCountdown();
-      setInterval(updateCountdown, 1000);
+      };
     };
   </script>
-  <style>
-    #spinnerCircle {
-      transition: stroke-dashoffset 0.05s linear;
-      transform: rotate(-90deg);
-      transform-origin: center;
-    }
-  </style>
 </head>
-<body class="bg-gray-100 flex items-center justify-center min-h-screen p-4 sm:p-6">
-  <div id="mainContainer" class="flex flex-col lg:flex-row gap-6 lg:gap-8 opacity-0 translate-y-5 transition-all duration-700 w-full max-w-7xl">
-    
-    <!-- Debt Hours Panel -->
-    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-[95%] text-center relative transform transition hover:scale-105">
-      <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-4 sm:mb-6">Debt Hours</h1>
-      <div class="text-4xl sm:text-5xl font-semibold text-blue-600 mb-6 sm:mb-8" id="debtHoursValue">0 hrs 0 mins</div>
-      <button id="editBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Edit Manually</button>
-
-      <div class="mt-8 sm:mt-10">
-        <h2 class="text-lg sm:text-xl font-semibold text-gray-700 mb-2 sm:mb-3">Work done today:</h2>
-        <div class="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4 mb-4">
-          <input id="doneHours" type="number" min="0" placeholder="Hours" class="w-full sm:w-30 p-3 border rounded-xl text-base sm:text-lg" />
-          <input id="doneMinutes" type="number" min="0" placeholder="Minutes" class="w-full sm:w-30 p-3 border rounded-xl text-base sm:text-lg" />
-        </div>
-        <button id="doneBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Done</button>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center p-6">
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full max-w-7xl">
+    <div class="bg-white shadow-lg rounded-2xl p-8 text-center transform transition hover:scale-105">
+      <h1 class="text-3xl font-bold text-gray-800 mb-1">Weekly Earnings</h1>
+      <div id="weekLabel" class="text-sm text-gray-400 mb-4">Week 1</div>
+      <div id="weeklyTotal" class="text-4xl font-semibold text-blue-600 mb-4">0.00 CAD</div>
+      <div class="w-full bg-gray-200 rounded-full h-4 mb-4">
+        <div id="progressBar" class="bg-blue-500 h-4 rounded-full w-0 transition-all"></div>
       </div>
-
-      <div id="countdown" class="mt-5 text-gray-400 text-sm sm:text-base"></div>
+      <p class="text-gray-600 mb-4">Remaining: <span id="remaining">300.00 CAD</span></p>
+      <input id="usdInput" type="number" placeholder="USD earned" class="w-full p-3 border rounded-xl mb-4 text-lg" />
+      <button id="addEarningsBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl transition-all w-full mb-3">Add Earnings</button>
+      <button id="undoBtn" class="bg-gray-400 hover:bg-gray-500 active:scale-95 text-white font-bold py-2 px-5 rounded-xl transition-all w-full opacity-50 cursor-not-allowed" disabled>Undo Last Entry</button>
     </div>
-
-    <!-- Stopwatch Panel -->
-    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-[95%] text-center relative flex flex-col items-center transform transition hover:scale-105">
-      <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-4 sm:mb-6">Stopwatch</h1>
-      <div id="spinnerContainer" class="relative w-40 sm:w-48 h-40 sm:h-48 mb-5 sm:mb-6">
-        <svg class="absolute top-0 left-0 w-full h-full" viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="45" stroke="#e5e7eb" stroke-width="10" fill="none" />
-          <circle cx="50" cy="50" r="45" stroke="#3b82f6" stroke-width="10" fill="none" stroke-linecap="round" stroke-dasharray="283" stroke-dashoffset="283" id="spinnerCircle" />
-        </svg>
-        <div class="absolute top-0 left-0 w-full h-full flex items-center justify-center">
-          <div id="stopwatchTime" class="text-2xl sm:text-3xl font-bold text-blue-600">0:00.00</div>
-        </div>
-      </div>
-      <div class="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4 mt-3 sm:mt-4 w-full sm:w-auto">
-        <button id="playPauseBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Play/Pause</button>
-        <button id="resetBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Reset</button>
+    <div class="bg-white shadow-lg rounded-2xl p-8 text-center transform transition hover:scale-105">
+      <h1 class="text-3xl font-bold text-gray-800 mb-6">Stopwatch</h1>
+      <div id="stopwatchTime" class="text-4xl font-bold text-blue-600 mb-6">0:00.00</div>
+      <div class="flex justify-center gap-4">
+        <button id="playPauseBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl transition-all">Play / Pause</button>
+        <button id="resetBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl transition-all">Reset</button>
       </div>
     </div>
-
-    <!-- Daily Summary Panel -->
-    <div class="bg-white shadow-lg rounded-2xl p-6 sm:p-8 w-full lg:w-[95%] text-center relative transform transition hover:scale-105">
-      <h1 class="text-2xl sm:text-3xl font-bold text-gray-800 mb-4 sm:mb-6">Daily Earnings</h1>
-      <div class="text-3xl sm:text-4xl font-semibold text-blue-600 mb-6 sm:mb-8" id="cadEarnings">0.00 CAD</div>
-      <button id="resetEarningsBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Reset Earnings</button>
-      <div class="mt-8 sm:mt-10">
-        <h2 class="text-lg sm:text-xl font-semibold text-gray-700 mb-2 sm:mb-3">Work Input:</h2>
-        <div class="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4 mb-4">
-          <input id="taskPay" type="number" min="0" placeholder="Hourly rate" class="w-full sm:w-30 p-3 border rounded-xl text-base sm:text-lg" />
-        </div>
-        
-        <h2 class="text-lg sm:text-xl font-semibold text-gray-700 mb-2 sm:mb-3">Hours left today:</h2>
-        <div class="text-3xl sm:text-4xl font-semibold text-blue-600 mb-4 sm:mb-6" id="hoursLeft">0 hrs</div>
-        <button id="resetHoursLeftBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl text-base sm:text-lg transition-all w-full sm:w-auto">Reset Hours</button>
+    <div class="bg-white shadow-lg rounded-2xl p-8 text-center transform transition hover:scale-105">
+      <h1 class="text-3xl font-bold text-gray-800 mb-4">Weekly Stats</h1>
+      <div class="mb-6">
+        <p class="text-gray-600 text-sm mb-2">This Week's Progress</p>
+        <div id="weekCalendar" class="grid grid-cols-7 gap-2"></div>
       </div>
+      <p class="text-gray-600 mb-6">Weekly Goal: <strong>300 CAD</strong></p>
+      <button id="historyBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl transition-all w-full mb-3">View Cycle History</button>
+      <button id="resetWeekBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl transition-all w-full">Reset Current Week</button>
     </div>
+  </div>
 
+  <div id="historyModal" class="hidden fixed inset-0 bg-black bg-opacity-50 modal-backdrop flex items-center justify-center p-6 z-50">
+    <div class="modal-content bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl">
+      <div class="flex justify-between items-center mb-6">
+        <h2 class="text-2xl font-bold text-gray-800">4-Week Cycle History</h2>
+        <button id="closeModal" class="text-gray-500 hover:text-gray-700 text-3xl leading-none">&times;</button>
+      </div>
+      <div id="historyList" class="space-y-2"></div>
+      <button id="resetAllWeeksBtn" class="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white font-bold py-3 px-5 rounded-xl transition-all w-full mt-6">Reset All Weeks</button>
+    </div>
   </div>
 </body>
 </html>
